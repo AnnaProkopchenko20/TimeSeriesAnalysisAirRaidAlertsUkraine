@@ -1,154 +1,122 @@
 # Kyiv air-raid alert onset forecast
 
-Agentic AI School 2026, Stage 2 (KSE University). Time series analysis of air raid alerts in Ukraine.
-Built with an AI assistant (Claude) as the main engineering tool; the full chat log is submitted separately.
+Command line tool that estimates the probability that **a new air raid alert starts in Kyiv City within the next hour**
+from the history of alerts (moving base rate + a small LightGBM correction). Built for Agentic AI School 2026, Stage 2.
 
-## The question this project answers
+> The estimate is only slightly better than a plain "recent alert rate" guess. It is **not** a safety tool: rely on
+> official air raid alerts and sirens.
 
-> At each full hour **t**, using only information available at t, what is the probability that **a new air raid
-> alert starts in Kyiv City within the next hour (t, t + 60 min]**?
+Method, leakage rules, results and the path to the solution are in [PROJECT_NOTES.md](PROJECT_NOTES.md).
 
-- **Target:** `Kyiv City` only. Kyiv oblast is a separate region and is used only as an input.
-- **Onset, not overlap:** the question is asked only at hours when **no Kyiv City alert is active**. If an alert is already
-  on, "will there be an alert in the next hour" is trivially yes, so those hours are excluded.
-- **Output:** a probability in [0, 1].
-- **Ongoing alerts:** for an alert still running at t, only "it is active" and the time since it started may be used, never
-  its final duration (that would leak the future).
+## 1. Setup
 
-## Final solution in one paragraph
+You need **Python 3.9 or newer** and **Git**.
 
-`logit(p) = logit(rate(t)) + f(features(t))`
-
-`rate(t)` is a **moving base rate**: the share of past no-alert hours that were followed by a Kyiv alert, computed over a
-short (7 day) and a long (56 day) window, shrunk towards the long-run rate and averaged in logit space. `f` is a small
-**LightGBM** model (4 leaves, strong regularisation) that learns only the *deviation* from that rate, using these inputs
-known at t: hour of day (sin/cos, Kyiv local time), log minutes since the last Kyiv alert ended, number of Kyiv alerts
-started in the last 1h / 3h / 24h, number of oblasts currently under alert, and an active flag for six neighbouring
-oblasts (Kyiv, Chernihiv, Zhytomyr, Poltava, Cherkasy, Sumy oblasts). Weekday and per-oblast elapsed minutes from the
-first spec are **not** used in the final model.
-
-## Quick start
-
-Requires Python 3.9+.
+**Get the code**
 
 ```
-py -m pip install pandas numpy scikit-learn lightgbm
+git clone https://github.com/AnnaProkopchenko20/TimeSeriesAnalysisAirRaidAlertsUkraine
+cd TimeSeriesAnalysisAirRaidAlertsUkraine
 ```
 
-1. **Get the data.** The scripts expect `datasets/volunteer_data_en.csv` from
-   [Vadimkin/ukrainian-air-raid-sirens-dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset). Keep these
-   scripts in the root of that repo (or copy the csv into a `datasets/` folder next to them). Run `git pull` first to
-   get the latest alerts.
-2. **Train and evaluate** (about a minute, prints all metrics, saves the model to `artifacts/`):
-   ```
-   py train_model.py
-   ```
-3. **Ask for a forecast:**
-   ```
-   py cli.py --date 2026-10-10 --time 18:00      # Kyiv local time
-   py cli.py                                     # now
-   py cli.py --help
-   ```
-   Output looks like:
-   ```
-   Kyiv City: chance that a NEW air-raid alert starts between 18:00 and 19:00 (Sat 2026-10-10)
-     probability:        xx.x%
-     recent base rate:   xx.x%   (7d+56d blend of past hours; the model nudged it by +x.x pp)
-   ```
-   Numbers are highlighted in purple; use `--no-color` for plain text.
-4. **(Optional) Re-run the comparison experiments** used to pick the final settings: `py experiments.py`.
+**Create and activate a virtual environment**
 
-### How the CLI behaves
+Windows (PowerShell):
 
-- Minutes are rounded down to the full hour (the model works on an hourly grid).
-- If an alert in Kyiv City is already active at that hour, it says so and gives no number.
-- For past times the features are rebuilt from history that **ends at that hour** (later alerts dropped, unfinished
-  alerts get an unknown end), so asking about the past never peeks at the future.
-- If the dataset ends up to 7 days before the requested time (`--max-gap-days`), it still answers but only with the recent
-  base rate and a warning, because alerts in the gap are unknown and the live-state features cannot be built.
-  Further out it refuses. Update the dataset first for real use.
-- Times before the model's training cutoff trigger a warning that the prediction is not out-of-sample.
+```
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+```
 
-### Files
+If PowerShell refuses to run the activation script, allow it for this window only and activate again:
+
+```
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.venv\Scripts\Activate.ps1
+```
+
+macOS / Linux:
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+When it worked, your prompt starts with `(.venv)`.
+
+**Install the dependencies**
+
+```
+python -m pip install pandas numpy scikit-learn lightgbm
+```
+
+These four packages are everything the project needs. Their own requirements, such as the time zone database, are
+installed automatically.
+
+**Data**
+
+The alert history is already in the repo: `datasets/volunteer_data_en.csv`, from
+[Vadimkin/ukrainian-air-raid-sirens-dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset). To use fresher
+alerts, replace that file with the latest `volunteer_data_en.csv` from the upstream repo, then re-run step 2.
+
+## 2. Train the model
+
+```
+python train_model.py
+```
+
+Takes about a minute. It runs the automatic data-leakage checks, evaluates on the last 30 days of data (never used for
+training), prints the results tables and saves the model to `artifacts/`.
+
+## 3. Get a forecast
+
+```
+python cli.py --date 2026-10-10 --time 18:00
+python cli.py
+python cli.py --help
+```
+
+- `--date` is `YYYY-MM-DD` and `--time` is `HH:MM`, both in Kyiv time. Without arguments it uses the current time.
+- Minutes are rounded down to the full hour: 18:40 is treated as 18:00.
+- The result is the chance that a new alert starts between that hour and the next one. Numbers are shown in purple; add
+  `--no-color` for plain text.
+- If an alert in Kyiv is already active at that hour, it says so and gives no number. The model only predicts the start
+  of a new alert.
+- If the dataset ends up to 7 days before the time you ask about, you get the recent base rate only, with a warning.
+  Further out it stops with an error. Update the dataset first for real use.
+
+Example output:
+
+```
+Kyiv City: chance that a NEW air-raid alert starts between 18:00 and 19:00 (Sat 2026-10-10)
+  probability:        xx.x%
+  recent base rate:   xx.x%   (7d+56d blend of past hours; the model nudged it by +x.x pp)
+```
+
+## 4. Optional: compare model variants
+
+```
+python experiments.py
+```
+
+Compares moving-rate windows, blends and correction strengths on 30-day test blocks (takes under a minute).
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'pandas'` (or `lightgbm`) | The virtual environment is not active. Activate it (step 1) and run the install line again. |
+| `py` is not recognised | Use `python` instead, or install Python from python.org and tick "Add to PATH". |
+| `Activate.ps1 cannot be loaded` | Run the `Set-ExecutionPolicy -Scope Process ...` line from step 1, then activate again. |
+| `cli.py` says the dataset ends too long before the requested time | Pick an earlier `--date`, or update `datasets/volunteer_data_en.csv`. |
+| `cli.py` cannot find the model | Run `python train_model.py` first. |
+
+## Files
 
 | File | Purpose |
 |---|---|
-| `train_model.py` | features, moving rate, LightGBM, leakage tests, evaluation, saves `artifacts/` |
-| `experiments.py` | compares rate windows, blends, EWMA and correction strength on 30-day blocks |
+| `train_model.py` | features, moving rate, LightGBM, leakage tests, evaluation; saves `artifacts/` |
 | `cli.py` | command line forecast on top of the saved model |
-| `artifacts/` | generated by `train_model.py`: `kyiv_onset_lgbm.txt`, `meta.json` |
-## Preventing data leakage
-
-- Every feature at t uses only data with timestamp <= t. Ongoing alerts expose only "still active" and elapsed time.
-- Split order is train, then 56 days validation, then test, with a 1 hour gap between them (a label at t looks up to t + 1h).
-- The **last 30 days are never used** for fitting, early stopping or choosing settings. They contain the official last
-  14 days, reported separately.
-- Variants were chosen using only five **older** 30-day blocks; the last 30 days were only reported.
-- The moving rate at t reads only outcomes of hours <= t - 1h (past outcomes, like any lag feature). This includes earlier
-  hours inside the holdout, which matches how it would run live; the model weights never see them.
-- Automated tests run on every training run: features are rebuilt from data truncated at t and must be identical, the
-  moving rates are recomputed by brute force from past labels only, and (in `experiments.py`) each rate is recomputed
-  from truncated data with the label at t flipped and must not change.
-
-## How we got here (path and options tried)
-
-1. **Sharpened the question.** The first version ("alert in the next hour, with how long each alert lasted") had two
-   problems: overlap versus onset, and duration as a leakage trap. Fixed to onset-only, elapsed time only, hourly grid.
-2. **Checked whether the model or the data was the bottleneck.** On eight 14-day blocks, logistic regression and
-   LightGBM were within 0.003 log loss of each other, so the model family barely mattered. The alert rate drifted from
-   about 7% in old blocks to 22% in the newest, and replacing the all-history base rate with the last-28-day rate cut log
-   loss from 0.461 to 0.416, more than any model change.
-3. **First training script.** `logit(p) = logit(28-day rate) + LightGBM correction`. The first leakage check failed;
-   the bug was in the check (it compared against a trimmed table), not the pipeline. Fixed and re-run. On the last
-   14 days (299 rows) the moving rate beat the all-history rate by 0.12 log loss, but the LightGBM correction was not
-   better than the rate alone. That window was too small to judge.
-4. **Made the evaluation less noisy.** Moved to 30-day blocks, one untouched holdout plus five selection blocks.
-5. **Tried improvements one at a time** (`experiments.py`), judged on the selection blocks:
-
-   | Idea | Effect on selection log loss |
-   |---|---|
-   | LightGBM correction on top of the rate | about -0.008 (0.3322 to 0.3240). The one clearly useful step |
-   | 7d + 56d blended rate instead of a 28d rate | about -0.0007 with LightGBM on (a near tie, won 4 of 5 blocks), kept |
-   | Window length 7/14/28/56 days | short windows slightly better, 56 days worst |
-   | Shrinkage strength 5/20/50 | 0.0002 or less, irrelevant |
-   | Exponentially weighted rate (half-life 7/14/28 days) | tied with the best windows, not kept |
-   | Shrinking the correction (x0.5, x0.25) | worse on selection blocks, kept at x1.0 |
-
-   Logistic regression and an hour-of-day factor on the rate were also tried early on and did not beat the rate.
-
-## Results
-
-Holdout = last 30 days (data through 2026-10-12), 650 evaluation hours, 20.5% of them followed by a Kyiv alert.
-Lower log loss is better. A coin flip (always 0.5) scores 0.693.
-
-| Model | Holdout log loss (30 d) | Last 14 d | Selection blocks (5 x 30 d) |
-|---|---|---|---|
-| all-history rate | 0.6127 | 0.6542 | 0.3487 |
-| 28d moving rate (first version) | 0.5082 | 0.5315 | 0.3322 |
-| 7d+56d moving rate | 0.5131 | 0.5351 | 0.3310 |
-| 28d rate + LightGBM (first version) | 0.5202 | 0.5443 | 0.3240 |
-| **Final: 7d+56d rate + LightGBM** | 0.5198 | 0.5454 | **0.3233** |
-
-What this shows, honestly:
-
-- **The solid result is the moving base rate.** It beats the all-history rate by about 0.10 log loss on the holdout
-  (95% interval excludes zero) because the alert rate drifts.
-- **The LightGBM correction has a small real signal historically:** the final model beat the plain rate in 5 of 5
-  selection blocks. **On the latest 30 days it does not:** it is slightly worse than the plain rate (the difference is
-  within noise), ROC-AUC is about 0.49, and calibration across probability bins is not monotone.
-- Log loss is not comparable across blocks. A constant predictor scores about 0.33 at a 10% base rate and about 0.53 at
-  22%, so the holdout column is higher mostly because the last 30 days contain many more alerts.
-- Forecasting the exact hour of the next onset from alert history alone is hard. Treat the output as "how busy has
-  Kyiv been lately", not as a precise forecast.
-
-## Limitations and next steps
-
-- Predictions are only slightly better than a plain recent-alert-rate guess and, on the latest data, no better. **Do not
-  use this for safety decisions.** Follow official air raid alerts and sirens.
-- Alert history only. News, official statements or Telegram text (allowed by the task) were not used.
-- Regime shifts matter more than model choice. Ideas not done: add alert counts over the last 7 and 14 days as features,
-  per-oblast elapsed time and weekday, calibrating the correction on the most recent period.
-- The saved model is trained before the last 30 days (to keep the evaluation honest). For live use it could be refit on
-  all data.
-- `CORRECTION_SCALE` in `train_model.py` (default 1.0) scales the correction. Lower values look better on the holdout but
-  were not chosen that way, because the holdout is not used to select settings.
+| `experiments.py` | comparison of the variants used to pick the final settings |
+| `datasets/` | alert history csv |
+| `artifacts/` | saved model (`kyiv_onset_lgbm.txt`) and its settings (`meta.json`) |
