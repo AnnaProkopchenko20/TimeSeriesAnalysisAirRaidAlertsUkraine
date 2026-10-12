@@ -1,0 +1,23 @@
+{
+  "features": [
+    "hour_sin",
+    "hour_cos",
+    "log_since_end",
+    "kyiv_starts_1h",
+    "kyiv_starts_3h",
+    "kyiv_starts_24h",
+    "n_oblasts_active",
+    "act_Kyivska",
+    "act_Chernihivska",
+    "act_Zhytomyrska",
+    "act_Poltavska",
+    "act_Cherkaska",
+    "act_Sumska"
+  ],
+  "short_days": 7,
+  "long_days": 56,
+  "shrink_k": 20,
+  "correction_scale": 1.0,
+  "trained_before": "2026-09-12 04:00:00+00:00",
+  "note": "rate = sigmoid(0.5*(logit(rate_7d)+logit(rate_56d))), each shrunk rate from labels of past no-alert hours (rows <= t-1h); prediction = sigmoid(correction_scale*booster.predict(raw_score=True) + logit(rate))"
+}
